@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/html">
+<head>
+    <meta charset="UTF-8">
+    <title>HI</title>
+    <link href="{{ url_for('static', filename='style.css') }}"
+      rel="stylesheet"/>
+</head>
+<body>
+<div class="container">
+        <h2>USER DASHBOARD</h2>
+        <p><b>NAME::</b>{{user.username}}</p>
+        <p><b>email::</b>{{user.email}}</p>
+        <button type="encryption" class="button">Encryption</button>
+         <button type="decryption" class="button">decryption</button>
+
+         <p> <a href="{{ url_for('logout') }}">logout</a></p>
+
+    </div>
+</body>
+</html>
