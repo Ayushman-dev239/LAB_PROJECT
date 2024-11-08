@@ -1,0 +1,120 @@
+<div class="container">
+    <div class="chat-container">
+        <div class="chat-header">
+            <h2>Chat with {{ receiver.username }}</h2>
+        </div>
+
+        <div class="chat-messages" id="messageContainer">
+            {% for message in messages %}
+            <div class="message {% if message.sender_id == current_user.id %}sent{% else %}received{% endif %}">
+                <strong>{{ message.sender.username }}:</strong>
+                <p>{{ message.message }}</p>
+                <small>{{ message.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</small>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="chat-input">
+            <input type="text" id="messageInput" placeholder="Type your message...">
+            <button onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+<script>
+    // Rest of the JavaScript code
+</script>
+
+<style>
+    /* Rest of the CSS styles */
+</style>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+<script>
+    const socket = io();
+    const room = "{{ room }}";
+    const receiverId = "{{ receiver.id }}";
+
+    socket.emit('join', {room: room});
+
+    socket.on('receive_message', function(data) {
+        const messageContainer = document.getElementById('messageContainer');
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'message ' + (data.sender === "{{ current_user.username }}" ? 'sent' : 'received');
+        messageDiv.innerHTML = `
+            <strong>${data.sender}:</strong>
+            <p>${data.message}</p>
+            <small>${data.timestamp}</small>
+        `;
+        messageContainer.appendChild(messageDiv);
+        messageContainer.scrollTop = messageContainer.scrollHeight;
+    });
+
+    function sendMessage() {
+        const messageInput = document.getElementById('messageInput');
+        const message = messageInput.value.trim();
+
+        if (message) {
+            socket.emit('send_message', {
+                message: message,
+                room: room,
+                receiver_id: receiverId
+            });
+            messageInput.value = '';
+        }
+    }
+
+    // Send message on Enter key press
+    document.getElementById('messageInput').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            sendMessage();
+        }
+    });
+</script>
+
+<style>
+    .chat-container {
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 20px;
+    }
+
+    .chat-messages {
+        height: 400px;
+        overflow-y: auto;
+        border: 1px solid #ccc;
+        padding: 10px;
+        margin-bottom: 20px;
+    }
+
+    .message {
+        margin-bottom: 10px;
+        padding: 10px;
+        border-radius: 5px;
+    }
+
+    .sent {
+        background-color: #e3f2fd;
+        margin-left: 20%;
+    }
+
+    .received {
+        background-color: #f5f5f5;
+        margin-right: 20%;
+    }
+
+    .chat-input {
+        display: flex;
+        gap: 10px;
+    }
+
+    .chat-input input {
+        flex: 1;
+        padding: 10px;
+    }
+
+    .chat-input button {
+        padding: 10px 20px;
+    }
+</style>
