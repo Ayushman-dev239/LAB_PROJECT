@@ -8,6 +8,14 @@ from Crypto.Random import get_random_bytes
 from flask import Flask, request, render_template, redirect, session, send_file, jsonify
 from flask_socketio import SocketIO, emit, join_room
 from flask_sqlalchemy import SQLAlchemy
+import os
+from datetime import datetime
+import hashlib
+from Crypto.Cipher import DES3
+from Crypto.Random import get_random_bytes
+from flask import Flask, jsonify, send_file
+from flask_socketio import emit
+from flask import Flask, request, render_template, redirect, session, send_file, jsonify, after_this_request
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database2.db'
@@ -30,8 +38,10 @@ class User(db.Model):
     username = db.Column(db.String(100), nullable=False)
     email = db.Column(db.String(100), unique=True)
     password = db.Column(db.String(100))
-    private_key = db.Column(db.Integer)  # DH private key
-    public_key = db.Column(db.Integer)  # DH public key
+    private_key = db.Column(db.String(64))  # Store as hex string
+    public_key = db.Column(db.String(64))  # Store as hex string
+
+    # DH public key
 
     def __init__(self, email, password, username):
         self.username = username
@@ -40,9 +50,13 @@ class User(db.Model):
         self.generate_dh_keys()
 
     def generate_dh_keys(self):
-        # Generate private and public keys for Diffie-Hellman
-        self.private_key = int.from_bytes(get_random_bytes(4), 'big') % P
-        self.public_key = pow(G, self.private_key, P)
+        # Generate private key (32 bytes for security)
+        private_bytes = get_random_bytes(32)
+        self.private_key = private_bytes.hex()
+        # Calculate public key
+        private_int = int.from_bytes(private_bytes, 'big')
+        public_int = pow(G, private_int, P)
+        self.public_key = hex(public_int)[2:]  # Remove '0x' prefix
 
     def check_password(self, password):
         return bcrypt.checkpw(password.encode('utf-8'), self.password.encode('utf-8'))
@@ -70,11 +84,22 @@ class SharedFile(db.Model):
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
 
-def calculate_shared_key(private_key, other_public_key):
-    """Calculate shared secret using Diffie-Hellman"""
-    shared_secret = pow(other_public_key, private_key, P)
-    # Use SHA-256 to derive a proper key for TDES
-    return hashlib.sha256(str(shared_secret).encode()).digest()[:24]
+def calculate_shared_key(private_key_hex, other_public_key_hex):
+    """Calculate shared secret using Diffie-Hellman with hex strings"""
+    try:
+        # Convert hex strings to integers
+        private_int = int.from_bytes(bytes.fromhex(private_key_hex), 'big')
+        other_public_int = int(other_public_key_hex, 16)
+
+        # Calculate shared secret
+        shared_secret = pow(other_public_int, private_int, P)
+
+        # Derive encryption key using SHA-256
+        shared_key = hashlib.sha256(str(shared_secret).encode()).digest()[:24]
+        return shared_key
+    except Exception as e:
+        print(f"Error calculating shared key: {str(e)}")
+        raise ValueError(f"Failed to calculate shared key: {str(e)}")
 
 
 
@@ -223,13 +248,18 @@ def upload_file():
         if not all([current_user, receiver_id, room, file.filename]):
             return jsonify({'error': 'Missing required data'}), 400
 
-        # Get receiver's public key
-        receiver = User.query.get(receiver_id)
+        # Get receiver using new SQLAlchemy style
+        receiver = db.session.get(User, receiver_id)
         if not receiver:
             return jsonify({'error': 'Receiver not found'}), 404
 
-        # Calculate shared key and encrypt file
-        shared_key = calculate_shared_key(current_user.private_key, receiver.public_key)
+        # Calculate shared key using hex strings
+        shared_key = calculate_shared_key(
+            current_user.private_key,
+            receiver.public_key
+        )
+
+        # Read and encrypt file
         file_data = file.read()
         encrypted_data = encrypt_file(file_data, shared_key)
 
@@ -253,7 +283,7 @@ def upload_file():
         )
         db.session.add(shared_file)
 
-        # Create chat message for file share
+        # Create chat message
         message = ChatMessage(
             sender_id=current_user.id,
             receiver_id=receiver_id,
@@ -266,7 +296,7 @@ def upload_file():
         db.session.add(message)
         db.session.commit()
 
-        # Emit file message to room
+        # Emit message
         socketio.emit('receive_message', {
             'sender': current_user.username,
             'message': f"Shared file: {file.filename}",
@@ -290,66 +320,136 @@ def upload_file():
 app.route('/download_file/<int:file_id>')
 
 
+def pad_data(data):
+    """Pad the data to be multiple of 8 (required for DES3)"""
+    padding_length = 8 - (len(data) % 8)
+    padded_data = data + bytes([padding_length] * padding_length)
+    return padded_data
+
+
+def unpad_data(padded_data):
+    """Remove PKCS7 padding"""
+    padding_length = padded_data[-1]
+    return padded_data[:-padding_length]
+
+
+def encrypt_file(file_data, shared_key):
+    """Encrypt file using TDES in CBC mode with proper padding"""
+    try:
+        # Generate IV
+        iv = get_random_bytes(8)  # DES3 uses 8-byte IV
+
+        # Pad the data (PKCS7)
+        block_size = 8
+        padding_length = block_size - (len(file_data) % block_size)
+        padded_data = file_data + bytes([padding_length] * padding_length)
+
+        # Create cipher
+        cipher = DES3.new(shared_key, DES3.MODE_CBC, iv)
+
+        # Encrypt
+        encrypted_data = cipher.encrypt(padded_data)
+
+        # Return IV + encrypted data
+        return iv + encrypted_data
+    except Exception as e:
+        print(f"Encryption error: {str(e)}")
+        raise ValueError(f"Encryption failed: {str(e)}")
+
+
+def decrypt_file(encrypted_data, shared_key):
+    """Decrypt file using TDES in CBC mode"""
+    try:
+        if len(encrypted_data) < 8:  # Need at least IV (8 bytes)
+            raise ValueError("Encrypted data is too short")
+
+        # Extract IV and ciphertext
+        iv = encrypted_data[:8]
+        ciphertext = encrypted_data[8:]
+
+        # Create cipher
+        cipher = DES3.new(shared_key, DES3.MODE_CBC, iv)
+
+        # Decrypt
+        padded_plaintext = cipher.decrypt(ciphertext)
+
+        # Remove padding
+        padding_length = padded_plaintext[-1]
+        if padding_length > 8:
+            raise ValueError("Invalid padding")
+        plaintext = padded_plaintext[:-padding_length]
+
+        return plaintext
+    except Exception as e:
+        print(f"Decryption error details: {str(e)}")
+        raise ValueError(f"Decryption failed: {str(e)}")
+
+
+@app.route('/download_file/<int:file_id>')
 def download_file(file_id):
     if 'email' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
 
     try:
-        # Get current user and file info
         current_user = User.query.filter_by(email=session['email']).first()
-        chat_message = ChatMessage.query.filter_by(id=file_id, is_file=True).first()
+        if not current_user:
+            return jsonify({'error': 'Current user not found'}), 404
 
-        if not chat_message:
-            # Try finding in SharedFile if not in ChatMessage
-            shared_file = SharedFile.query.get(file_id)
-            if not shared_file:
-                return jsonify({'error': 'File not found'}), 404
-            filename = shared_file.filename
-            original_filename = shared_file.original_filename
-            sender_id = shared_file.sender_id
-            receiver_id = shared_file.receiver_id
-        else:
-            filename = chat_message.file_name
-            original_filename = chat_message.original_filename
-            sender_id = chat_message.sender_id
-            receiver_id = chat_message.receiver_id
+        # Use SQLAlchemy 2.0 style queries
+        chat_message = db.session.get(ChatMessage, file_id)
+        shared_file = None if chat_message else db.session.get(SharedFile, file_id)
 
-        # Verify user is part of the conversation
+        if not chat_message and not shared_file:
+            return jsonify({'error': 'File not found'}), 404
+
+        file_record = chat_message or shared_file
+        filename = getattr(file_record, 'file_name', None) or file_record.filename
+        original_filename = file_record.original_filename
+        sender_id = file_record.sender_id
+        receiver_id = file_record.receiver_id
+
         if current_user.id not in (sender_id, receiver_id):
             return jsonify({'error': 'Unauthorized access'}), 401
 
-        # Get the other user's public key
         other_user_id = sender_id if current_user.id == receiver_id else receiver_id
-        other_user = User.query.get(other_user_id)
+        other_user = db.session.get(User, other_user_id)
 
         if not other_user:
             return jsonify({'error': 'Other user not found'}), 404
 
-        # Calculate shared key
-        shared_key = calculate_shared_key(current_user.private_key, other_user.public_key)
+        # Calculate shared key using hex strings
+        shared_key = calculate_shared_key(
+            current_user.private_key,
+            other_user.public_key
+        )
 
-        # Verify file exists
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         if not os.path.exists(file_path):
             return jsonify({'error': 'File not found on server'}), 404
 
-        # Read and decrypt file
         with open(file_path, 'rb') as f:
             encrypted_data = f.read()
 
         try:
-            # Decrypt the file
             decrypted_data = decrypt_file(encrypted_data, shared_key)
 
-            # Create a temporary file for the decrypted content
+            # Create temp file
             temp_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'temp')
             os.makedirs(temp_dir, exist_ok=True)
-            temp_path = os.path.join(temp_dir, f'temp_{original_filename}')
+            temp_path = os.path.join(temp_dir, f'temp_{datetime.now().strftime("%Y%m%d_%H%M%S")}_{original_filename}')
 
             with open(temp_path, 'wb') as f:
                 f.write(decrypted_data)
 
-            # Send the file
+            @after_this_request
+            def remove_file(response):
+                try:
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                except Exception as e:
+                    print(f"Error removing temp file: {e}")
+                return response
+
             return send_file(
                 temp_path,
                 as_attachment=True,
@@ -357,76 +457,14 @@ def download_file(file_id):
                 max_age=0
             )
 
-        except ValueError as e:
+        except Exception as e:
             print(f"Decryption error: {str(e)}")
-            return jsonify({'error': 'Failed to decrypt file'}), 400
+            return jsonify({'error': f'Failed to decrypt file: {str(e)}'}), 400
 
     except Exception as e:
         print(f"Download error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-    finally:
-        # Clean up temporary file
-        if 'temp_path' in locals() and os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except:
-                pass
-
-
-# Update the decrypt_file function to handle errors better
-def decrypt_file(encrypted_data, shared_key):
-    """Decrypt file using TDES in EAX mode"""
-    try:
-        if len(encrypted_data) < 32:  # Minimum length for nonce (16) + tag (16)
-            raise ValueError("Encrypted data is too short")
-
-        # Extract nonce and tag
-        nonce = encrypted_data[:16]
-        tag = encrypted_data[16:32]
-        ciphertext = encrypted_data[32:]
-
-        # Create cipher object
-        cipher = DES3.new(shared_key, DES3.MODE_EAX, nonce=nonce)
-
-        # Decrypt and verify
-        plaintext = cipher.decrypt(ciphertext)
-        try:
-            cipher.verify(tag)
-        except ValueError:
-            raise ValueError("Decryption failed: File may be corrupted or key is incorrect")
-
-        return plaintext
-
-    except Exception as e:
-        print(f"Decryption error details: {str(e)}")
-        raise ValueError(f"Decryption failed: {str(e)}")
-
-
-# Update the encrypt_file function to match
-def encrypt_file(file_data, shared_key):
-    """Encrypt file using TDES in EAX mode"""
-    try:
-        # Generate a nonce
-        nonce = get_random_bytes(16)
-
-        # Create cipher object
-        cipher = DES3.new(shared_key, DES3.MODE_EAX, nonce=nonce)
-
-        # Encrypt the data
-        ciphertext = cipher.encrypt(file_data)
-
-        # Get the MAC tag
-        tag = cipher.digest()
-
-        # Combine nonce, tag, and ciphertext
-        return nonce + tag + ciphertext
-
-    except Exception as e:
-        print(f"Encryption error: {str(e)}")
-        raise ValueError(f"Encryption failed: {str(e)}")
-
-# [Previous route handlers remain the same...]
 
 if __name__ == '__main__':
     with app.app_context():
