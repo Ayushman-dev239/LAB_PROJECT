@@ -7,181 +7,108 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #f0f2f5;
-        }
-
         .chat-container {
-            max-width: 1200px;
-            margin: 20px auto;
-            background: white;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            height: calc(100vh - 40px);
-            display: flex;
-            flex-direction: column;
-        }
-
-        .chat-header {
+            max-width: 800px;
+            margin: 0 auto;
             padding: 20px;
-            border-bottom: 1px solid #e0e0e0;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
         }
-
-        .user-info {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .user-avatar {
-            width: 40px;
-            height: 40px;
-            background: #4a90e2;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: bold;
-        }
-
         .chat-area {
-            flex-grow: 1;
+            height: 400px;
             overflow-y: auto;
+            border: 1px solid #ccc;
             padding: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
+            margin-bottom: 20px;
         }
-
         .message {
-            max-width: 70%;
-            padding: 10px 15px;
-            border-radius: 15px;
-            margin: 5px 0;
-            word-wrap: break-word;
+            margin-bottom: 10px;
+            padding: 10px;
+            border-radius: 5px;
         }
-
-        .message.sent {
-            background: #0084ff;
-            color: white;
-            align-self: flex-end;
-            border-bottom-right-radius: 5px;
+        .sent {
+            background-color: #e3f2fd;
+            margin-left: 20%;
         }
-
-        .message.received {
-            background: #e9ecef;
-            color: black;
-            align-self: flex-start;
-            border-bottom-left-radius: 5px;
+        .received {
+            background-color: #f5f5f5;
+            margin-right: 20%;
         }
-
         .message-time {
-            font-size: 0.75rem;
-            opacity: 0.7;
+            font-size: 0.8em;
+            color: #666;
             margin-top: 5px;
         }
-
+        .chat-input-area {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .chat-input {
+            flex-grow: 1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        .btn {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .btn:hover {
+            background-color: #0056b3;
+        }
+        .file-input {
+            display: none;
+        }
         .file-message {
             display: flex;
             align-items: center;
             gap: 10px;
         }
-
         .file-icon {
-            font-size: 1.5rem;
+            font-size: 1.5em;
         }
-
-        .chat-input-area {
-            padding: 20px;
-            border-top: 1px solid #e0e0e0;
-            display: flex;
-            gap: 10px;
-        }
-
-        .chat-input {
-            flex-grow: 1;
-            padding: 12px;
-            border: 1px solid #e0e0e0;
-            border-radius: 25px;
-            outline: none;
-            font-size: 1rem;
-        }
-
-        .btn {
-            padding: 12px 20px;
-            border: none;
-            border-radius: 25px;
-            background: #0084ff;
-            color: white;
-            cursor: pointer;
-            transition: background 0.3s ease;
-        }
-
-        .btn:hover {
-            background: #0073e6;
-        }
-
-        .file-input {
-            display: none;
-        }
-
         .file-list {
-            padding: 10px 20px;
-            background: #f8f9fa;
-            border-top: 1px solid #e0e0e0;
+            margin-bottom: 20px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
         }
-
-        .file-list h3 {
-            margin-bottom: 10px;
-            color: #666;
-        }
-
         .file-item {
             display: flex;
             align-items: center;
             gap: 10px;
-            padding: 5px 0;
+            margin-bottom: 5px;
         }
-
+        .upload-progress {
+            display: none;
+            height: 5px;
+            background-color: #f0f0f0;
+            margin-top: 10px;
+        }
+        .upload-progress-bar {
+            height: 100%;
+            width: 0;
+            background-color: #007bff;
+            transition: width 0.3s ease;
+        }
         .loading {
             display: none;
             position: fixed;
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            background: rgba(0,0,0,0.8);
+            background-color: rgba(0, 0, 0, 0.8);
             color: white;
             padding: 20px;
-            border-radius: 10px;
+            border-radius: 5px;
         }
     </style>
 </head>
 <body>
     <div class="chat-container">
-        <div class="chat-header">
-            <div class="user-info">
-                <div class="user-avatar">
-                    {{ receiver.username[0].upper() }}
-                </div>
-                <div>
-                    <h2>{{ receiver.username }}</h2>
-                    <small>{{ receiver.email }}</small>
-                </div>
-            </div>
-            <a href="/dashboard" class="btn">Back to Dashboard</a>
-        </div>
-
         <div class="chat-area" id="chatArea">
             {% for message in messages %}
                 <div class="message {% if message.sender_id == current_user.id %}sent{% else %}received{% endif %}">
@@ -190,7 +117,7 @@
                             <i class="fas fa-file file-icon"></i>
                             <div>
                                 <div>{{ message.original_filename }}</div>
-                                <button class="btn" onclick="downloadFile({{ message.id }})">
+                                <button class="btn" onclick="downloadFile('{{ message.id }}')">
                                     Download
                                 </button>
                             </div>
@@ -207,11 +134,11 @@
 
         <div class="file-list">
             <h3>Recent Files</h3>
-            {% for file in shared_files[:5] %}
+            {% for file in shared_files %}
                 <div class="file-item">
                     <i class="fas fa-file"></i>
                     <span>{{ file.original_filename }}</span>
-                    <button class="btn" onclick="downloadFile({{ file.id }})">
+                    <button class="btn" onclick="downloadFile('{{ file.id }}')">
                         Download
                     </button>
                 </div>
@@ -228,32 +155,42 @@
                 <i class="fas fa-paper-plane"></i>
             </button>
         </div>
+        <div class="upload-progress" id="uploadProgress">
+            <div class="upload-progress-bar" id="uploadProgressBar"></div>
+        </div>
     </div>
 
     <div id="loading" class="loading">Processing...</div>
 
     <script>
+        // Initialize Socket.IO connection
         const socket = io();
         const room = "{{ room }}";
         const currentUserId = {{ current_user.id }};
         const receiverId = {{ receiver.id }};
 
-        // Join the room
-        socket.emit('join', {room: room});
+        // Join the room when connection is established
+        socket.on('connect', () => {
+            console.log('Connected to WebSocket');
+            socket.emit('join', {room: room});
+        });
 
-        // Handle receiving messages
+        // Handle received messages
         socket.on('receive_message', function(data) {
+            console.log('Received message:', data);
             const chatArea = document.getElementById('chatArea');
             const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${data.sender === "{{ current_user.username }}" ? 'sent' : 'received'}`;
+            messageDiv.className = `message ${data.sender_id === currentUserId ? 'sent' : 'received'}`;
 
             if (data.is_file) {
                 messageDiv.innerHTML = `
                     <div class="file-message">
                         <i class="fas fa-file file-icon"></i>
                         <div>
-                            <div>${data.message.replace('Shared file: ', '')}</div>
-                            <button class="btn" onclick="location.reload()">Download</button>
+                            <div>${data.message}</div>
+                            <button class="btn" onclick="downloadFile('${data.file_id}')">
+                                Download
+                            </button>
                         </div>
                     </div>
                     <div class="message-time">${data.timestamp}</div>
@@ -275,71 +212,94 @@
             const message = messageInput.value.trim();
 
             if (message) {
+                console.log('Sending message:', message);
                 socket.emit('send_message', {
                     message: message,
-                    room: room,
-                    receiver_id: receiverId
+                    receiver_id: receiverId,
+                    room: room
                 });
                 messageInput.value = '';
             }
         }
 
-        // Handle file uploads
+        // Handle file upload
         document.getElementById('fileInput').addEventListener('change', async function(e) {
-            if (!this.files.length) return;
+            if (!e.target.files.length) return;
 
-            const file = this.files[0];
+            const file = e.target.files[0];
             const formData = new FormData();
             formData.append('file', file);
-            formData.append('room', room);
             formData.append('receiver_id', receiverId);
+            formData.append('room', room);
 
-            document.getElementById('loading').style.display = 'block';
+            const progressBar = document.getElementById('uploadProgressBar');
+            const progressContainer = document.getElementById('uploadProgress');
+            progressContainer.style.display = 'block';
 
             try {
                 const response = await fetch('/upload_file', {
                     method: 'POST',
-                    body: formData
+                    body: formData,
+                    onUploadProgress: (progressEvent) => {
+                        const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                        progressBar.style.width = percentCompleted + '%';
+                    }
                 });
 
                 const result = await response.json();
-                if (!result.success) {
-                    alert(result.error || 'Upload failed');
-                }
+                if (!response.ok) throw new Error(result.error || 'Upload failed');
+
+                console.log('File uploaded successfully:', result);
+                e.target.value = ''; // Clear file input
             } catch (error) {
-                alert('Upload failed: ' + error.message);
+                console.error('Upload error:', error);
+                alert('File upload failed: ' + error.message);
             } finally {
-                document.getElementById('loading').style.display = 'none';
-                this.value = '';
+                progressContainer.style.display = 'none';
+                progressBar.style.width = '0';
             }
         });
 
-        // Handle file downloads
+        // Download file function
         async function downloadFile(fileId) {
             document.getElementById('loading').style.display = 'block';
 
             try {
-                const response = await fetch(`/download_file/${fileId}`);
-                if (!response.ok) throw new Error('Download failed');
+                const response = await fetch(`/download_file/${fileId}`, {
+                    method: 'GET',
+                    credentials: 'same-origin'
+                });
+
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+                const contentDisposition = response.headers.get('Content-Disposition');
+                let filename = 'downloaded_file';
+                if (contentDisposition) {
+                    const matches = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+                    if (matches && matches[1]) {
+                        filename = matches[1].replace(/['"]/g, '');
+                    }
+                }
 
                 const blob = await response.blob();
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.style.display = 'none';
                 a.href = url;
-                a.download = response.headers.get('Content-Disposition').split('filename=')[1];
+                a.download = filename;
                 document.body.appendChild(a);
                 a.click();
                 window.URL.revokeObjectURL(url);
                 a.remove();
             } catch (error) {
+                console.error('Download error:', error);
                 alert('Download failed: ' + error.message);
             } finally {
                 document.getElementById('loading').style.display = 'none';
             }
         }
 
-        // Enter key to send message
+        // Enter key handler for message input
         document.getElementById('messageInput').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 sendMessage();
@@ -351,6 +311,20 @@
             const chatArea = document.getElementById('chatArea');
             chatArea.scrollTop = chatArea.scrollHeight;
         };
+
+        // Error handler for socket connection
+        socket.on('error', (error) => {
+            console.error('WebSocket error:', error);
+        });
+
+        // Reconnection handler
+        socket.on('disconnect', () => {
+            console.log('Disconnected from WebSocket');
+        });
+
+        socket.on('connect_error', (error) => {
+            console.error('Connection error:', error);
+        });
     </script>
 </body>
 </html>
