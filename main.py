@@ -1,7 +1,6 @@
 import hashlib
 import os
 from datetime import datetime
-
 import bcrypt
 from Crypto.Cipher import DES3
 from Crypto.Random import get_random_bytes
@@ -16,6 +15,8 @@ from Crypto.Random import get_random_bytes
 from flask import Flask, jsonify, send_file
 from flask_socketio import emit
 from flask import Flask, request, render_template, redirect, session, send_file, jsonify, after_this_request
+from io import BytesIO
+from flask import session, jsonify, send_file
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database2.db'
@@ -387,83 +388,99 @@ def decrypt_file(encrypted_data, shared_key):
 
 @app.route('/download_file/<int:file_id>')
 def download_file(file_id):
-    if 'email' not in session:
-        return jsonify({'error': 'Unauthorized'}), 401
-
     try:
+        # Check if user is logged in
+        if 'email' not in session:
+            print("No email in session")
+            return jsonify({'error': 'Please log in to download files'}), 401
+
         current_user = User.query.filter_by(email=session['email']).first()
         if not current_user:
-            return jsonify({'error': 'Current user not found'}), 404
+            print(f"User not found for email: {session['email']}")
+            return jsonify({'error': 'User not found'}), 401
 
-        # Use SQLAlchemy 2.0 style queries
-        chat_message = db.session.get(ChatMessage, file_id)
-        shared_file = None if chat_message else db.session.get(SharedFile, file_id)
+        print(f"Current user: {current_user.id} attempting to download file: {file_id}")
+
+        # Try to find the file in both ChatMessage and SharedFile
+        chat_message = ChatMessage.query.get(file_id)
+        shared_file = None if chat_message else SharedFile.query.get(file_id)
 
         if not chat_message and not shared_file:
+            print(f"File not found with ID: {file_id}")
             return jsonify({'error': 'File not found'}), 404
 
-        file_record = chat_message or shared_file
-        filename = getattr(file_record, 'file_name', None) or file_record.filename
-        original_filename = file_record.original_filename
-        sender_id = file_record.sender_id
-        receiver_id = file_record.receiver_id
+        # Determine file details and access rights
+        if chat_message:
+            filename = chat_message.file_name
+            original_filename = chat_message.original_filename
+            sender_id = chat_message.sender_id
+            receiver_id = chat_message.receiver_id
+        else:
+            filename = shared_file.filename
+            original_filename = shared_file.original_filename
+            sender_id = shared_file.sender_id
+            receiver_id = shared_file.receiver_id
 
+        print(f"File details - Sender: {sender_id}, Receiver: {receiver_id}, Current user: {current_user.id}")
+
+        # Verify user has permission to access this file
         if current_user.id not in (sender_id, receiver_id):
-            return jsonify({'error': 'Unauthorized access'}), 401
+            print(f"Unauthorized access attempt by user {current_user.id}")
+            return jsonify({'error': 'You do not have permission to access this file'}), 403
 
+        # Get the other user for key calculation
         other_user_id = sender_id if current_user.id == receiver_id else receiver_id
-        other_user = db.session.get(User, other_user_id)
+        other_user = User.query.get(other_user_id)
 
         if not other_user:
-            return jsonify({'error': 'Other user not found'}), 404
+            print(f"Other user not found: {other_user_id}")
+            return jsonify({'error': 'Error retrieving file information'}), 404
 
-        # Calculate shared key using hex strings
-        shared_key = calculate_shared_key(
-            current_user.private_key,
-            other_user.public_key
-        )
+        # Calculate shared key
+        try:
+            shared_key = calculate_shared_key(
+                current_user.private_key,
+                other_user.public_key
+            )
+        except Exception as e:
+            print(f"Error calculating shared key: {str(e)}")
+            return jsonify({'error': 'Error processing file encryption'}), 500
 
+        # Check if file exists
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         if not os.path.exists(file_path):
+            print(f"File not found at path: {file_path}")
             return jsonify({'error': 'File not found on server'}), 404
 
-        with open(file_path, 'rb') as f:
-            encrypted_data = f.read()
-
         try:
+            # Read and decrypt file
+            with open(file_path, 'rb') as f:
+                encrypted_data = f.read()
+
             decrypted_data = decrypt_file(encrypted_data, shared_key)
 
-            # Create temp file
-            temp_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'temp')
-            os.makedirs(temp_dir, exist_ok=True)
-            temp_path = os.path.join(temp_dir, f'temp_{datetime.now().strftime("%Y%m%d_%H%M%S")}_{original_filename}')
-
-            with open(temp_path, 'wb') as f:
-                f.write(decrypted_data)
-
-            @after_this_request
-            def remove_file(response):
-                try:
-                    if os.path.exists(temp_path):
-                        os.remove(temp_path)
-                except Exception as e:
-                    print(f"Error removing temp file: {e}")
-                return response
+            # Serve file from memory
+            memory_file = BytesIO(decrypted_data)
+            memory_file.seek(0)
 
             return send_file(
-                temp_path,
+                memory_file,
+                mimetype='application/octet-stream',
                 as_attachment=True,
-                download_name=original_filename,
-                max_age=0
+                download_name=original_filename
             )
 
         except Exception as e:
-            print(f"Decryption error: {str(e)}")
-            return jsonify({'error': f'Failed to decrypt file: {str(e)}'}), 400
+            print(f"Error during file processing: {str(e)}")
+            return jsonify({'error': 'Error processing file'}), 500
 
     except Exception as e:
-        print(f"Download error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        print(f"Unexpected error in download_file: {str(e)}")
+        return jsonify({'error': 'An unexpected error occurred'}), 500
+
+
+# Add these imports at the top of your file if not already present
+
 
 
 if __name__ == '__main__':

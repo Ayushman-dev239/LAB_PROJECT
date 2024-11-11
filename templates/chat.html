@@ -138,9 +138,14 @@
                 <div class="file-item">
                     <i class="fas fa-file"></i>
                     <span>{{ file.original_filename }}</span>
-                    <button class="btn" onclick="downloadFile('{{ file.id }}')">
-                        Download
-                    </button>
+                    {% if message.is_file %}
+    <a href="javascript:void(0)"
+       onclick="downloadFile({{ message.id }})"
+       class="text-blue-500 hover:text-blue-700">
+        {{ message.original_filename }}
+    </a>
+{% endif %}
+
                 </div>
             {% endfor %}
         </div>
@@ -260,51 +265,48 @@
             }
         });
 
-        // Download file function
-        async function downloadFile(fileId) {
-            document.getElementById('loading').style.display = 'block';
+        function downloadFile(fileId) {
+    // Get CSRF token if you're using it
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
 
-            try {
-                const response = await fetch(`/download_file/${fileId}`, {
-                    method: 'GET',
-                    credentials: 'same-origin'
-                });
-
-                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-
-                const contentDisposition = response.headers.get('Content-Disposition');
-                let filename = 'downloaded_file';
-                if (contentDisposition) {
-                    const matches = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
-                    if (matches && matches[1]) {
-                        filename = matches[1].replace(/['"]/g, '');
-                    }
-                }
-
-                const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.style.display = 'none';
-                a.href = url;
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                window.URL.revokeObjectURL(url);
-                a.remove();
-            } catch (error) {
-                console.error('Download error:', error);
-                alert('Download failed: ' + error.message);
-            } finally {
-                document.getElementById('loading').style.display = 'none';
-            }
+    fetch(`/download_file/${fileId}`, {
+        method: 'GET',
+        headers: {
+            // Include CSRF token if you're using it
+            // 'X-CSRF-Token': csrfToken,
+        },
+        credentials: 'same-origin'  // This ensures cookies/session are sent
+    })
+    .then(response => {
+        if (response.ok) {
+            return response.blob();
+        } else {
+            return response.json().then(error => {
+                throw new Error(error.error || 'Download failed');
+            });
         }
+    })
+    .then(blob => {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        // Get filename from response headers if available
+        const contentDisposition = response.headers.get('content-disposition');
+        const filename = contentDisposition
+            ? contentDisposition.split('filename=')[1].replace(/"/g, '')
+            : 'downloaded_file';
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+    })
+    .catch(error => {
+        console.error('Download error:', error);
+        alert('Error downloading file: ' + error.message);
+    });
+}
 
-        // Enter key handler for message input
-        document.getElementById('messageInput').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                sendMessage();
-            }
-        });
 
         // Auto-scroll to bottom on load
         window.onload = function() {
