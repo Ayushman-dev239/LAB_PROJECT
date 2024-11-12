@@ -17,13 +17,18 @@ from flask_socketio import emit
 from flask import Flask, request, render_template, redirect, session, send_file, jsonify, after_this_request
 from io import BytesIO
 from flask import session, jsonify, send_file
+import logging
+from flask import make_response
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database2.db'
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 if not os.path.exists(app.config['UPLOAD_FOLDER']):
-    os.makedirs(app.config['UPLOAD_FOLDER'])
+    os.makedirs(app.config['UPLOAD_FOLDER'], mode=0o755)
 
 db = SQLAlchemy(app)
 app.secret_key = 'secret_key'
@@ -389,55 +394,43 @@ def decrypt_file(encrypted_data, shared_key):
 @app.route('/download_file/<int:file_id>')
 def download_file(file_id):
     try:
-        # Check if user is logged in
         if 'email' not in session:
-            print("No email in session")
             return jsonify({'error': 'Please log in to download files'}), 401
 
         current_user = User.query.filter_by(email=session['email']).first()
         if not current_user:
-            print(f"User not found for email: {session['email']}")
             return jsonify({'error': 'User not found'}), 401
 
-        print(f"Current user: {current_user.id} attempting to download file: {file_id}")
-
-        # Try to find the file in both ChatMessage and SharedFile
-        chat_message = ChatMessage.query.get(file_id)
-        shared_file = None if chat_message else SharedFile.query.get(file_id)
-
-        if not chat_message and not shared_file:
-            print(f"File not found with ID: {file_id}")
-            return jsonify({'error': 'File not found'}), 404
-
-        # Determine file details and access rights
-        if chat_message:
-            filename = chat_message.file_name
-            original_filename = chat_message.original_filename
-            sender_id = chat_message.sender_id
-            receiver_id = chat_message.receiver_id
-        else:
+        # First check SharedFile
+        shared_file = db.session.get(SharedFile, file_id)
+        if shared_file:
             filename = shared_file.filename
             original_filename = shared_file.original_filename
             sender_id = shared_file.sender_id
             receiver_id = shared_file.receiver_id
+        else:
+            # Then check ChatMessage
+            chat_message = db.session.get(ChatMessage, file_id)
+            if not chat_message or not chat_message.is_file:
+                return jsonify({'error': 'File not found'}), 404
+            filename = chat_message.file_name
+            original_filename = chat_message.original_filename
+            sender_id = chat_message.sender_id
+            receiver_id = chat_message.receiver_id
 
-        print(f"File details - Sender: {sender_id}, Receiver: {receiver_id}, Current user: {current_user.id}")
-
-        # Verify user has permission to access this file
+        # Verify user has permission
         if current_user.id not in (sender_id, receiver_id):
-            print(f"Unauthorized access attempt by user {current_user.id}")
             return jsonify({'error': 'You do not have permission to access this file'}), 403
 
-        # Get the other user for key calculation
-        other_user_id = sender_id if current_user.id == receiver_id else receiver_id
-        other_user = User.query.get(other_user_id)
+        # Get the other user's information
+        other_user_id = receiver_id if current_user.id == sender_id else sender_id
+        other_user = db.session.get(User, other_user_id)
 
         if not other_user:
-            print(f"Other user not found: {other_user_id}")
             return jsonify({'error': 'Error retrieving file information'}), 404
 
-        # Calculate shared key
         try:
+            # Calculate shared key
             shared_key = calculate_shared_key(
                 current_user.private_key,
                 other_user.public_key
@@ -446,10 +439,8 @@ def download_file(file_id):
             print(f"Error calculating shared key: {str(e)}")
             return jsonify({'error': 'Error processing file encryption'}), 500
 
-        # Check if file exists
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         if not os.path.exists(file_path):
-            print(f"File not found at path: {file_path}")
             return jsonify({'error': 'File not found on server'}), 404
 
         try:
@@ -459,16 +450,13 @@ def download_file(file_id):
 
             decrypted_data = decrypt_file(encrypted_data, shared_key)
 
-            # Serve file from memory
-            memory_file = BytesIO(decrypted_data)
-            memory_file.seek(0)
+            # Create response with proper headers
+            response = make_response(decrypted_data)
+            response.headers['Content-Type'] = 'application/octet-stream'
+            response.headers['Content-Disposition'] = f'attachment; filename="{original_filename}"'
+            response.headers['Content-Length'] = len(decrypted_data)
 
-            return send_file(
-                memory_file,
-                mimetype='application/octet-stream',
-                as_attachment=True,
-                download_name=original_filename
-            )
+            return response
 
         except Exception as e:
             print(f"Error during file processing: {str(e)}")
@@ -477,8 +465,6 @@ def download_file(file_id):
     except Exception as e:
         print(f"Unexpected error in download_file: {str(e)}")
         return jsonify({'error': 'An unexpected error occurred'}), 500
-
-
 # Add these imports at the top of your file if not already present
 
 

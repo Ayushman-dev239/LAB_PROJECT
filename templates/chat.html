@@ -110,44 +110,47 @@
 <body>
     <div class="chat-container">
         <div class="chat-area" id="chatArea">
-            {% for message in messages %}
-                <div class="message {% if message.sender_id == current_user.id %}sent{% else %}received{% endif %}">
-                    {% if message.is_file %}
-                        <div class="file-message">
-                            <i class="fas fa-file file-icon"></i>
-                            <div>
-                                <div>{{ message.original_filename }}</div>
-                                <button class="btn" onclick="downloadFile('{{ message.id }}')">
-                                    Download
-                                </button>
+            {% if messages %}
+                {% for message in messages %}
+                    <div class="message {% if message.sender_id == current_user.id %}sent{% else %}received{% endif %}">
+                        {% if message.is_file %}
+                            <div class="file-message">
+                                <i class="fas fa-file file-icon"></i>
+                                <div>
+                                    <div>{{ message.original_filename or 'File' }}</div>
+                                    <button class="btn" onclick="downloadFile({{ message.id }})">
+                                        Download
+                                    </button>
+                                </div>
                             </div>
+                        {% else %}
+                            <div>{{ message.message }}</div>
+                        {% endif %}
+                        <div class="message-time">
+                            {{ message.timestamp.strftime('%Y-%m-%d %H:%M:%S') if message.timestamp else '' }}
                         </div>
-                    {% else %}
-                        <div>{{ message.message }}</div>
-                    {% endif %}
-                    <div class="message-time">
-                        {{ message.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}
                     </div>
-                </div>
-            {% endfor %}
+                {% endfor %}
+            {% else %}
+                <div class="message">No messages yet. Start the conversation!</div>
+            {% endif %}
         </div>
 
         <div class="file-list">
             <h3>Recent Files</h3>
-            {% for file in shared_files %}
-                <div class="file-item">
-                    <i class="fas fa-file"></i>
-                    <span>{{ file.original_filename }}</span>
-                    {% if message.is_file %}
-    <a href="javascript:void(0)"
-       onclick="downloadFile({{ message.id }})"
-       class="text-blue-500 hover:text-blue-700">
-        {{ message.original_filename }}
-    </a>
-{% endif %}
-
-                </div>
-            {% endfor %}
+            {% if shared_files %}
+                {% for file in shared_files %}
+                    <div class="file-item">
+                        <i class="fas fa-file"></i>
+                        <span>{{ file.original_filename }}</span>
+                        <button class="btn" onclick="downloadFile({{ file.id }})">
+                            Download
+                        </button>
+                    </div>
+                {% endfor %}
+            {% else %}
+                <div>No files shared yet</div>
+            {% endif %}
         </div>
 
         <div class="chat-input-area">
@@ -193,7 +196,7 @@
                         <i class="fas fa-file file-icon"></i>
                         <div>
                             <div>${data.message}</div>
-                            <button class="btn" onclick="downloadFile('${data.file_id}')">
+                            <button class="btn" onclick="downloadFile(${data.file_id})">
                                 Download
                             </button>
                         </div>
@@ -211,22 +214,6 @@
             chatArea.scrollTop = chatArea.scrollHeight;
         });
 
-        // Send message function
-        function sendMessage() {
-            const messageInput = document.getElementById('messageInput');
-            const message = messageInput.value.trim();
-
-            if (message) {
-                console.log('Sending message:', message);
-                socket.emit('send_message', {
-                    message: message,
-                    receiver_id: receiverId,
-                    room: room
-                });
-                messageInput.value = '';
-            }
-        }
-
         // Handle file upload
         document.getElementById('fileInput').addEventListener('change', async function(e) {
             if (!e.target.files.length) return;
@@ -239,16 +226,15 @@
 
             const progressBar = document.getElementById('uploadProgressBar');
             const progressContainer = document.getElementById('uploadProgress');
+            const loading = document.getElementById('loading');
+
             progressContainer.style.display = 'block';
+            loading.style.display = 'block';
 
             try {
                 const response = await fetch('/upload_file', {
                     method: 'POST',
-                    body: formData,
-                    onUploadProgress: (progressEvent) => {
-                        const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-                        progressBar.style.width = percentCompleted + '%';
-                    }
+                    body: formData
                 });
 
                 const result = await response.json();
@@ -261,52 +247,77 @@
                 alert('File upload failed: ' + error.message);
             } finally {
                 progressContainer.style.display = 'none';
+                loading.style.display = 'none';
                 progressBar.style.width = '0';
             }
         });
 
-        function downloadFile(fileId) {
-    // Get CSRF token if you're using it
-    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+        // Send message function
+        function sendMessage() {
+            const messageInput = document.getElementById('messageInput');
+            const message = messageInput.value.trim();
 
-    fetch(`/download_file/${fileId}`, {
-        method: 'GET',
-        headers: {
-            // Include CSRF token if you're using it
-            // 'X-CSRF-Token': csrfToken,
-        },
-        credentials: 'same-origin'  // This ensures cookies/session are sent
-    })
-    .then(response => {
-        if (response.ok) {
-            return response.blob();
-        } else {
-            return response.json().then(error => {
-                throw new Error(error.error || 'Download failed');
-            });
+            if (message) {
+                socket.emit('send_message', {
+                    message: message,
+                    receiver_id: receiverId,
+                    room: room
+                });
+                messageInput.value = '';
+            }
         }
-    })
-    .then(blob => {
+
+        async function downloadFile(fileId) {
+    const loading = document.getElementById('loading');
+    loading.style.display = 'block';
+
+    try {
+        const response = await fetch(`/download_file/${fileId}`, {
+            method: 'GET',
+            credentials: 'same-origin'
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'Download failed');
+        }
+
+        // Get filename from Content-Disposition header
+        const contentDisposition = response.headers.get('Content-Disposition');
+        const filename = contentDisposition
+            ? decodeURIComponent(contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/)[1].replace(/['"]/g, ''))
+            : 'downloaded_file';
+
+        // Create blob from response
+        const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);
+
+        // Create temporary link and trigger download
         const a = document.createElement('a');
         a.href = url;
-        // Get filename from response headers if available
-        const contentDisposition = response.headers.get('content-disposition');
-        const filename = contentDisposition
-            ? contentDisposition.split('filename=')[1].replace(/"/g, '')
-            : 'downloaded_file';
         a.download = filename;
         document.body.appendChild(a);
         a.click();
+
+        // Cleanup
         window.URL.revokeObjectURL(url);
         document.body.removeChild(a);
-    })
-    .catch(error => {
+
+    } catch (error) {
         console.error('Download error:', error);
         alert('Error downloading file: ' + error.message);
-    });
+    } finally {
+        loading.style.display = 'none';
+    }
 }
 
+        // Handle enter key in message input
+        document.getElementById('messageInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
 
         // Auto-scroll to bottom on load
         window.onload = function() {
@@ -314,12 +325,11 @@
             chatArea.scrollTop = chatArea.scrollHeight;
         };
 
-        // Error handler for socket connection
+        // Error handlers
         socket.on('error', (error) => {
             console.error('WebSocket error:', error);
         });
 
-        // Reconnection handler
         socket.on('disconnect', () => {
             console.log('Disconnected from WebSocket');
         });
